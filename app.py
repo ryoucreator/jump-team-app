@@ -2,6 +2,7 @@ import sqlite3
 import pandas as pd
 import streamlit as st
 from datetime import date
+import os
 
 # ページ設定
 st.set_page_config(page_title="陸上部 跳躍ブロック データ管理システム", layout="wide")
@@ -9,40 +10,44 @@ st.set_page_config(page_title="陸上部 跳躍ブロック データ管理シ�
 DB_FILE = "land_and_field.db"
 
 # ---------------------------------------------------------
-# 1. データベース初期化・接続処理
+# 1. データベース初期化・接続処理（自動修復機能付き）
 # ---------------------------------------------------------
 def init_and_get_athletes():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     
-    # 選手マスターテーブル作成
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS athletes (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            grade TEXT,
-            event TEXT
-        )
-    ''')
-    
-    # 練習記録テーブル作成
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS practice_logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            athlete_id INTEGER,
-            date TEXT,
-            menu_name TEXT,
-            set_num INTEGER,
-            distance_or_weight REAL,
-            reps_or_time REAL,
-            memo TEXT,
-            FOREIGN KEY (athlete_id) REFERENCES athletes(id)
-        )
-    ''')
-    
-    # 初期サンプルデータの投入（選手データが空の場合）
-    c.execute("SELECT COUNT(*) FROM athletes")
-    if c.fetchone()[0] == 0:
+    # 構造の不一致によるエラーを防ぐため、athletesテーブルが存在するか確認
+    try:
+        c.execute("SELECT id, name, grade, event FROM athletes")
+    except sqlite3.OperationalError:
+        # テーブルが存在しない、または古い構造の場合は一度テーブルを作り直す
+        c.execute("DROP TABLE IF EXISTS athletes")
+        c.execute("DROP TABLE IF EXISTS practice_logs")
+        
+        c.execute('''
+            CREATE TABLE athletes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                grade TEXT,
+                event TEXT
+            )
+        ''')
+        
+        c.execute('''
+            CREATE TABLE practice_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                athlete_id INTEGER,
+                date TEXT,
+                menu_name TEXT,
+                set_num INTEGER,
+                distance_or_weight REAL,
+                reps_or_time REAL,
+                memo TEXT,
+                FOREIGN KEY (athlete_id) REFERENCES athletes(id)
+            )
+        ''')
+        
+        # サンプルデータの投入
         sample_athletes = [
             ('山田 太郎', '3年', '走幅跳'),
             ('佐藤 花子', '2年', '走高跳'),
@@ -51,8 +56,8 @@ def init_and_get_athletes():
         c.executemany("INSERT INTO athletes (name, grade, event) VALUES (?, ?, ?)", sample_athletes)
         conn.commit()
         
-    # 選手データの取得
-    c.execute("SELECT id, name, grade, event FROM athletes")
+        c.execute("SELECT id, name, grade, event FROM athletes")
+
     rows = c.fetchall()
     conn.close()
     
