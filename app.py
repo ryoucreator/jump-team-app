@@ -11,7 +11,7 @@ DB_FILE = "land_and_field.db"
 # ---------------------------------------------------------
 # 1. データベース初期化・接続処理
 # ---------------------------------------------------------
-def init_db():
+def init_and_get_athletes():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     
@@ -49,45 +49,41 @@ def init_db():
             ('鈴木 一郎', '1年', '三段跳')
         ]
         c.executemany("INSERT INTO athletes (name, grade, event) VALUES (?, ?, ?)", sample_athletes)
+        conn.commit()
         
-    conn.commit()
+    # 選手データの取得
+    c.execute("SELECT id, name, grade, event FROM athletes")
+    rows = c.fetchall()
     conn.close()
+    
+    df = pd.DataFrame(rows, columns=["選手ID", "氏名", "学年", "専門種目"])
+    return df
 
 def get_connection():
     return sqlite3.connect(DB_FILE)
 
 # ---------------------------------------------------------
-# 2. データ取得関数（テーブルが確実に存在する状態で呼び出し）
-# ---------------------------------------------------------
-def load_athletes():
-    init_db()  # データ読み込み前に確実にテーブル作成・初期化を実行
-    conn = get_connection()
-    df = pd.read_sql_query("SELECT id AS 選手ID, name AS 氏名, grade AS 学年, event AS 専門種目 FROM athletes", conn)
-    conn.close()
-    return df
-
-# ---------------------------------------------------------
-# 3. アプリメイン画面
+# 2. アプリメイン画面
 # ---------------------------------------------------------
 st.title("🏃‍♂️ 陸上部 跳躍ブロック データ管理システム")
 st.header("🏋️ 練習メニューグループ一括入力")
 
 # 選手データの読み込み
-df_athletes = load_athletes()
+df_athletes = init_and_get_athletes()
 
 if df_athletes.empty:
-    st.warning("登録されている選手がいません。選手登録を行ってください。")
+    st.warning("登録されている選手がいません。")
 else:
     st.subheader("1. 対象選手の選択（フィルター）")
     
     col1, col2 = st.columns(2)
     
     with col1:
-        grades = ["すべて"] + list(df_athletes["学年"].dropna().unique())
+        grades = ["すべて"] + [g for g in df_athletes["学年"].dropna().unique() if g]
         selected_grade = st.selectbox("学年で絞り込み", grades)
         
     with col2:
-        events = ["すべて"] + list(df_athletes["専門種目"].dropna().unique())
+        events = ["すべて"] + [e for e in df_athletes["専門種目"].dropna().unique() if e]
         selected_event = st.selectbox("専門種目で絞り込み", events, key="event_filter")
 
     # フィルター適用
