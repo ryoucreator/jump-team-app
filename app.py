@@ -15,7 +15,7 @@ def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     
-    # 選手マスターテーブル
+    # 選手マスターテーブル作成
     c.execute('''
         CREATE TABLE IF NOT EXISTS athletes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -25,7 +25,7 @@ def init_db():
         )
     ''')
     
-    # 練習記録テーブル
+    # 練習記録テーブル作成
     c.execute('''
         CREATE TABLE IF NOT EXISTS practice_logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -53,15 +53,14 @@ def init_db():
     conn.commit()
     conn.close()
 
-init_db()
-
 def get_connection():
     return sqlite3.connect(DB_FILE)
 
 # ---------------------------------------------------------
-# 2. データ取得関数
+# 2. データ取得関数（テーブルが確実に存在する状態で呼び出し）
 # ---------------------------------------------------------
 def load_athletes():
+    init_db()  # データ読み込み前に確実にテーブル作成・初期化を実行
     conn = get_connection()
     df = pd.read_sql_query("SELECT id AS 選手ID, name AS 氏名, grade AS 学年, event AS 専門種目 FROM athletes", conn)
     conn.close()
@@ -89,7 +88,7 @@ else:
         
     with col2:
         events = ["すべて"] + list(df_athletes["専門種目"].dropna().unique())
-        selected_event = st.selectbox("専門種目 liquid/絞り込み", events, key="event_filter")
+        selected_event = st.selectbox("専門種目で絞り込み", events, key="event_filter")
 
     # フィルター適用
     filtered_df = df_athletes.copy()
@@ -98,7 +97,7 @@ else:
     if selected_event != "すべて":
         filtered_df = filtered_df[filtered_df["専門種目"] == selected_event]
 
-    # 表示用フォーマット関数（IndexErrorを防ぐ安全な実装）
+    # 表示用フォーマット関数
     def format_athlete(athlete_id):
         match = df_athletes[df_athletes["選手ID"] == athlete_id]
         if not match.empty:
