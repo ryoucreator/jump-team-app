@@ -6,7 +6,8 @@ from datetime import date
 # ページ設定
 st.set_page_config(page_title="陸上部 跳躍ブロック データ管理システム", layout="wide")
 
-DB_FILE = "land_and_field.db"
+# 既存の破損・古いDBとの衝突を避けるため新しいファイル名に指定
+DB_FILE = "jump_team_v2.db"
 
 # ---------------------------------------------------------
 # 1. データベース初期化・取得処理
@@ -55,7 +56,7 @@ def init_db():
         )
     ''')
     
-    # サンプルデータ（空の場合のみ）
+    # 初期データ（空の場合のみ）
     c.execute("SELECT COUNT(*) FROM athletes")
     if c.fetchone()[0] == 0:
         sample_athletes = [
@@ -86,14 +87,16 @@ def load_athletes():
     return df
 
 # ---------------------------------------------------------
-# 2. サイドバー（従来の選択メニュー）
+# 2. サイドバー（プルダウン形式でメニュー選択）
 # ---------------------------------------------------------
-st.sidebar.title("🏃‍♂️ メニュー選択")
-page = st.sidebar.radio(
+st.sidebar.title("🏃‍♂️ システムメニュー")
+
+# プルダウン（selectbox）によるページ選択
+page = st.sidebar.selectbox(
     "機能を選択してください",
     [
         "🏋️ 練習メニュー一括入力", 
-        "⏱️ CTテスト記録", 
+        "⏱️️ CTテスト記録", 
         "👤 選手登録・管理", 
         "📊 練習・テスト記録の確認"
     ]
@@ -109,7 +112,7 @@ if page == "🏋️ 練習メニュー一括入力":
     df_athletes = load_athletes()
 
     if df_athletes.empty:
-        st.warning("登録されている選手がいません。「選手登録・管理」から選手を追加してください。")
+        st.warning("登録されている選手がいません。「👤 選手登録・管理」から選手を追加してください。")
     else:
         st.subheader("1. 対象選手の選択（フィルター）")
         col1, col2 = st.columns(2)
@@ -194,7 +197,6 @@ elif page == "⏱️ CTテスト記録":
         with st.form("ct_test_form"):
             ct_date = st.date_input("実施日", date.today())
             
-            # 選手選択
             athlete_dict = {f"{row['氏名']} ({row['学年']}/{row['専門種目']})": row['選手ID'] for _, row in df_athletes.iterrows()}
             selected_athlete_name = st.selectbox("選手を選択", list(athlete_dict.keys()))
             selected_athlete_id = athlete_dict[selected_athlete_name]
@@ -229,21 +231,25 @@ elif page == "⏱️ CTテスト記録":
 elif page == "👤 選手登録・管理":
     st.header("👤 選手登録・管理")
     
-    with st.form("add_athlete_form"):
+    with st.form("add_athlete_form", clear_on_submit=True):
         name = st.text_input("氏名")
         grade = st.selectbox("学年", ["1年", "2年", "3年", "4年", "その他"])
         event = st.selectbox("専門種目", ["走幅跳", "走高跳", "三段跳", "棒高跳", "その他"])
         submit_athlete = st.form_submit_button("選手を追加")
         
         if submit_athlete:
-            if name:
+            if name.strip():
+                init_db()
                 conn = get_connection()
                 c = conn.cursor()
-                c.execute("INSERT INTO athletes (name, grade, event) VALUES (?, ?, ?)", (name, grade, event))
-                conn.commit()
-                conn.close()
-                st.success(f"{name} 選手を登録しました！")
-                st.rerun()
+                try:
+                    c.execute("INSERT INTO athletes (name, grade, event) VALUES (?, ?, ?)", (name.strip(), grade, event))
+                    conn.commit()
+                    st.success(f"{name.strip()} 選手を登録しました！")
+                except Exception as e:
+                    st.error(f"登録エラー: {e}")
+                finally:
+                    conn.close()
             else:
                 st.error("氏名を入力してください。")
                 
