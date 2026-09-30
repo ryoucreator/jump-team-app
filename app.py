@@ -39,6 +39,21 @@ def init_db():
             FOREIGN KEY (athlete_id) REFERENCES athletes(id)
         )
     ''')
+
+    # CTテスト記録テーブル
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS ct_tests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            athlete_id INTEGER,
+            date TEXT,
+            standing_long_jump REAL,
+            standing_triple_jump REAL,
+            medicine_ball_throw REAL,
+            sprint_30m REAL,
+            memo TEXT,
+            FOREIGN KEY (athlete_id) REFERENCES athletes(id)
+        )
+    ''')
     
     # サンプルデータ（空の場合のみ）
     c.execute("SELECT COUNT(*) FROM athletes")
@@ -71,12 +86,17 @@ def load_athletes():
     return df
 
 # ---------------------------------------------------------
-# 2. サイドバー（メニュー切替）
+# 2. サイドバー（従来の選択メニュー）
 # ---------------------------------------------------------
-st.sidebar.title("メニュー")
+st.sidebar.title("🏃‍♂️ メニュー選択")
 page = st.sidebar.radio(
     "機能を選択してください",
-    ["練習メニュー一括入力", "選手登録・管理", "練習記録の確認・分析"]
+    [
+        "🏋️ 練習メニュー一括入力", 
+        "⏱️ CTテスト記録", 
+        "👤 選手登録・管理", 
+        "📊 練習・テスト記録の確認"
+    ]
 )
 
 st.title("🏃‍♂️ 陸上部 跳躍ブロック データ管理システム")
@@ -84,12 +104,12 @@ st.title("🏃‍♂️ 陸上部 跳躍ブロック データ管理システム
 # ---------------------------------------------------------
 # ページ1: 練習メニュー一括入力
 # ---------------------------------------------------------
-if page == "練習メニュー一括入力":
+if page == "🏋️ 練習メニュー一括入力":
     st.header("🏋️ 練習メニューグループ一括入力")
     df_athletes = load_athletes()
 
     if df_athletes.empty:
-        st.warning("登録されている選手がいません。「選手登録・管理」メニューから選手を追加してください。")
+        st.warning("登録されている選手がいません。「選手登録・管理」から選手を追加してください。")
     else:
         st.subheader("1. 対象選手の選択（フィルター）")
         col1, col2 = st.columns(2)
@@ -162,9 +182,51 @@ if page == "練習メニュー一括入力":
                     st.success(f"{len(target_ids)}名分の練習記録を一括登録しました！")
 
 # ---------------------------------------------------------
-# ページ2: 選手登録・管理
+# ページ2: CTテスト記録
 # ---------------------------------------------------------
-elif page == "選手登録・管理":
+elif page == "⏱️ CTテスト記録":
+    st.header("⏱️ CTテスト（コントロールテスト）記録")
+    df_athletes = load_athletes()
+    
+    if df_athletes.empty:
+        st.warning("登録されている選手がいません。")
+    else:
+        with st.form("ct_test_form"):
+            ct_date = st.date_input("実施日", date.today())
+            
+            # 選手選択
+            athlete_dict = {f"{row['氏名']} ({row['学年']}/{row['専門種目']})": row['選手ID'] for _, row in df_athletes.iterrows()}
+            selected_athlete_name = st.selectbox("選手を選択", list(athlete_dict.keys()))
+            selected_athlete_id = athlete_dict[selected_athlete_name]
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                slj = st.number_input("立ち幅跳び (m)", min_value=0.0, value=0.0, step=0.01)
+                stj = st.number_input("立ち三段跳び (m)", min_value=0.0, value=0.0, step=0.01)
+            with col2:
+                mb = st.number_input("メディシンボール投げ (m)", min_value=0.0, value=0.0, step=0.1)
+                sprint_30 = st.number_input("30m走 (秒)", min_value=0.0, value=0.0, step=0.01)
+                
+            ct_memo = st.text_area("テスト備考・コンディション", placeholder="例: 接地感覚良好、追風1.2m")
+            
+            submit_ct = st.form_submit_button("CTテスト結果を保存")
+            
+            if submit_ct:
+                conn = get_connection()
+                c = conn.cursor()
+                c.execute('''
+                    INSERT INTO ct_tests 
+                    (athlete_id, date, standing_long_jump, standing_triple_jump, medicine_ball_throw, sprint_30m, memo)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                ''', (selected_athlete_id, str(ct_date), slj, stj, mb, sprint_30, ct_memo))
+                conn.commit()
+                conn.close()
+                st.success("CTテストの記録を保存しました！")
+
+# ---------------------------------------------------------
+# ページ3: 選手登録・管理
+# ---------------------------------------------------------
+elif page == "👤 選手登録・管理":
     st.header("👤 選手登録・管理")
     
     with st.form("add_athlete_form"):
@@ -191,34 +253,63 @@ elif page == "選手登録・管理":
     st.dataframe(df_athletes, use_container_width=True)
 
 # ---------------------------------------------------------
-# ページ3: 練習記録の確認・分析
+# ページ4: 練習・テスト記録の確認
 # ---------------------------------------------------------
-elif page == "練習記録の確認・分析":
-    st.header("📊 練習記録一覧")
+elif page == "📊 練習・テスト記録の確認":
+    st.header("📊 記録データの確認")
+    
+    tab1, tab2 = st.tabs(["🏋️ 練習記録一覧", "⏱️ CTテスト結果一覧"])
     
     conn = get_connection()
-    query = '''
-        SELECT 
-            p.date AS 日付,
-            a.name AS 氏名,
-            a.grade AS 学年,
-            a.event AS 専門種目,
-            p.menu_name AS メニュー名,
-            p.set_num AS セット数,
-            p.distance_or_weight AS "距離(m)/重量(kg)",
-            p.reps_or_time AS "回数/タイム(秒)",
-            p.memo AS メメモ
-        FROM practice_logs p
-        JOIN athletes a ON p.athlete_id = a.id
-        ORDER BY p.date DESC, p.id DESC
-    '''
-    try:
-        df_logs = pd.read_sql_query(query, conn)
-        if df_logs.empty:
-            st.info("まだ練習記録がありません。")
-        else:
-            st.dataframe(df_logs, use_container_width=True)
-    except Exception as e:
-        st.info("まだ練習記録データがありません。")
-    finally:
-        conn.close()
+    
+    with tab1:
+        query_p = '''
+            SELECT 
+                p.date AS 日付,
+                a.name AS 氏名,
+                a.grade AS 学年,
+                a.event AS 専門種目,
+                p.menu_name AS メニュー名,
+                p.set_num AS セット数,
+                p.distance_or_weight AS "距離(m)/重量(kg)",
+                p.reps_or_time AS "回数/タイム(秒)",
+                p.memo AS メモ
+            FROM practice_logs p
+            JOIN athletes a ON p.athlete_id = a.id
+            ORDER BY p.date DESC, p.id DESC
+        '''
+        try:
+            df_p = pd.read_sql_query(query_p, conn)
+            if df_p.empty:
+                st.info("練習記録はまだありません。")
+            else:
+                st.dataframe(df_p, use_container_width=True)
+        except Exception:
+            st.info("練習記録はまだありません。")
+
+    with tab2:
+        query_ct = '''
+            SELECT 
+                c.date AS 実施日,
+                a.name AS 氏名,
+                a.grade AS 学年,
+                a.event AS 専門種目,
+                c.standing_long_jump AS "立ち幅跳び(m)",
+                c.standing_triple_jump AS "立ち三段跳び(m)",
+                c.medicine_ball_throw AS "メディシンボール(m)",
+                c.sprint_30m AS "30m走(秒)",
+                c.memo AS 備考
+            FROM ct_tests c
+            JOIN athletes a ON c.athlete_id = a.id
+            ORDER BY c.date DESC, c.id DESC
+        '''
+        try:
+            df_ct = pd.read_sql_query(query_ct, conn)
+            if df_ct.empty:
+                st.info("CTテストの記録はまだありません。")
+            else:
+                st.dataframe(df_ct, use_container_width=True)
+        except Exception:
+            st.info("CTテストの記録はまだありません。")
+            
+    conn.close()
