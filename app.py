@@ -2,11 +2,11 @@ import sqlite3
 import pandas as pd
 import streamlit as st
 from datetime import date
+import io
 
 # ページ設定
 st.set_page_config(page_title="陸上部 跳躍ブロック データ管理システム", layout="wide")
 
-# DBファイル名
 DB_FILE = "jump_team_v2.db"
 
 # ---------------------------------------------------------
@@ -56,17 +56,7 @@ def init_db():
         )
     ''')
     
-    # 初期データ（空の場合のみ）
-    c.execute("SELECT COUNT(*) FROM athletes")
-    if c.fetchone()[0] == 0:
-        sample_athletes = [
-            ('山田 太郎', '3年', '走幅跳'),
-            ('佐藤 花子', '2年', '走高跳'),
-            ('鈴木 一郎', '1年', '三段跳')
-        ]
-        c.executemany("INSERT INTO athletes (name, grade, event) VALUES (?, ?, ?)", sample_athletes)
-        conn.commit()
-        
+    conn.commit()
     conn.close()
 
 def get_connection():
@@ -87,14 +77,14 @@ def load_athletes():
     return df
 
 # ---------------------------------------------------------
-# 2. サイドバー（プルダウン形式のメニュー選択）
+# 2. サイドバー
 # ---------------------------------------------------------
 st.sidebar.title("🏃‍♂️ システムメニュー")
 
-# 絵文字不一致による表示バグを防ぐためシンプルテキストで制御
 MENU_PRACTICE = "練習メニュー一括入力"
 MENU_CT_TEST = "CTテスト記録"
 MENU_ATHLETE = "選手登録・管理"
+MENU_IMPORT = "📁 CSV一括インポート（膨大データ用）"
 MENU_LOGS = "練習・テスト記録の確認"
 
 page = st.sidebar.selectbox(
@@ -103,6 +93,7 @@ page = st.sidebar.selectbox(
         MENU_PRACTICE, 
         MENU_CT_TEST, 
         MENU_ATHLETE, 
+        MENU_IMPORT,
         MENU_LOGS
     ]
 )
@@ -113,11 +104,11 @@ st.title("🏃‍♂️ 陸上部 跳躍ブロック データ管理システム
 # ページ1: 練習メニュー一括入力
 # ---------------------------------------------------------
 if page == MENU_PRACTICE:
-    st.header("🏋️ 練習メニューグループ一括入力")
+    st.header("🏋️️ 練習メニューグループ一括入力")
     df_athletes = load_athletes()
 
     if df_athletes.empty:
-        st.warning("登録されている選手がいません。「選手登録・管理」から選手を追加してください。")
+        st.warning("登録されている選手がいません。「選手登録・管理」または「CSV一括インポート」から選手を追加してください。")
     else:
         st.subheader("1. 対象選手の選択（フィルター）")
         col1, col2 = st.columns(2)
@@ -265,7 +256,121 @@ elif page == MENU_ATHLETE:
     st.dataframe(df_athletes, use_container_width=True)
 
 # ---------------------------------------------------------
-# ページ4: 練習・テスト記録の確認
+# 新機能: CSV一括インポート機能
+# ---------------------------------------------------------
+elif page == MENU_IMPORT:
+    st.header("📁 CSVデータ一括インポート")
+    st.markdown("Excel等で作成した大量の選手データや過去ログをCSVファイルで一括取り込みします。")
+    
+    import_type = st.radio("取り込むデータ種別を選択", ["選手マスター一括登録", "過去の練習記録一括登録", "過去のCTテスト記録一括登録"])
+    
+    # テンプレートデータ生成
+    if import_type == "選手マスター一括登録":
+        st.subheader("1. 選手登録用テンプレート")
+        sample_df = pd.DataFrame([
+            {"氏名": "山田 太郎", "学年": "1年", "専門種目": "走幅跳"},
+            {"氏名": "鈴木 次郎", "学年": "2年", "専門種目": "三段跳"}
+        ])
+        st.dataframe(sample_df)
+        
+        csv_data = sample_df.to_csv(index=False).encode('utf-8-sig')
+        st.download_button("テンプレートCSVをダウンロード", csv_data, "athletes_template.csv", "text/csv")
+        
+        uploaded_file = st.file_uploader("作成した選手CSVファイルをアップロード", type=["csv"])
+        if uploaded_file and st.button("選手データをまとめて追加"):
+            try:
+                df = pd.read_csv(uploaded_file)
+                conn = get_connection()
+                c = conn.cursor()
+                count = 0
+                for _, row in df.iterrows():
+                    c.execute("INSERT INTO athletes (name, grade, event) VALUES (?, ?, ?)", 
+                              (str(row["氏名"]).strip(), str(row["学年"]).strip(), str(row["専門種目"]).strip()))
+                    count += 1
+                conn.commit()
+                conn.close()
+                st.success(f"{count} 名の選手を一括登録しました！")
+            except Exception as e:
+                st.error(f"取り込みエラー: 項目名（列名）が正しく揃っているか確認してください。 ({e})")
+
+    elif import_type == "過去の練習記録一括登録":
+        st.subheader("1. 練習記録用テンプレート")
+        sample_df = pd.DataFrame([
+            {"氏名": "山田 太郎", "日付": "2026-04-01", "メニュー名": "助走踏切ドリル", "セット数": 5, "距離(m)または重量(kg)": 0, "回数またはタイム": 5, "メモ": "動作良好"},
+        ])
+        st.dataframe(sample_df)
+        csv_data = sample_df.to_csv(index=False).encode('utf-8-sig')
+        st.download_button("テンプレートCSVをダウンロード", csv_data, "practice_template.csv", "text/csv")
+        
+        uploaded_file = st.file_uploader("作成した練習記録CSVファイルをアップロード", type=["csv"])
+        if uploaded_file and st.button("練習記録をまとめて追加"):
+            try:
+                df = pd.read_csv(uploaded_file)
+                df_athletes = load_athletes()
+                name_to_id = dict(zip(df_athletes["氏名"], df_athletes["選手ID"]))
+                
+                conn = get_connection()
+                c = conn.cursor()
+                success_count = 0
+                skip_count = 0
+                
+                for _, row in df.iterrows():
+                    athlete_name = str(row["氏名"]).strip()
+                    if athlete_name in name_to_id:
+                        a_id = name_to_id[athlete_name]
+                        c.execute('''
+                            INSERT INTO practice_logs (athlete_id, date, menu_name, set_num, distance_or_weight, reps_or_time, memo)
+                            VALUES (?, ?, ?, ?, ?, ?, ?)
+                        ''', (a_id, str(row["日付"]), str(row["メニュー名"]), int(row["セット数"]), 
+                              float(row.get("距離(m)または重量(kg)", 0)), float(row.get("回数またはタイム", 0)), str(row.get("メモ", ""))))
+                        success_count += 1
+                    else:
+                        skip_count += 1
+                conn.commit()
+                conn.close()
+                st.success(f"{success_count} 件の練習記録を取り込みました！")
+                if skip_count > 0:
+                    st.warning(f"{skip_count} 件のデータは、該当する氏名が選手マスターに登録されていないためスキップされました。")
+            except Exception as e:
+                st.error(f"取り込みエラー: 列名やデータ形式を確認してください。 ({e})")
+
+    elif import_type == "過去のCTテスト記録一括登録":
+        st.subheader("1. CTテスト用テンプレート")
+        sample_df = pd.DataFrame([
+            {"氏名": "山田 太郎", "日付": "2026-04-15", "立ち幅跳び(m)": 2.80, "立ち三段跳び(m)": 8.50, "メディシンボール(m)": 14.2, "30m走(秒)": 4.10, "メモ": "自己ベスト"}
+        ])
+        st.dataframe(sample_df)
+        csv_data = sample_df.to_csv(index=False).encode('utf-8-sig')
+        st.download_button("テンプレートCSVをダウンロード", csv_data, "ct_test_template.csv", "text/csv")
+        
+        uploaded_file = st.file_uploader("作成したCTテストCSVファイルをアップロード", type=["csv"])
+        if uploaded_file and st.button("CTテスト記録をまとめて追加"):
+            try:
+                df = pd.read_csv(uploaded_file)
+                df_athletes = load_athletes()
+                name_to_id = dict(zip(df_athletes["氏名"], df_athletes["選手ID"]))
+                
+                conn = get_connection()
+                c = conn.cursor()
+                success_count = 0
+                for _, row in df.iterrows():
+                    athlete_name = str(row["氏名"]).strip()
+                    if athlete_name in name_to_id:
+                        a_id = name_to_id[athlete_name]
+                        c.execute('''
+                            INSERT INTO ct_tests (athlete_id, date, standing_long_jump, standing_triple_jump, medicine_ball_throw, sprint_30m, memo)
+                            VALUES (?, ?, ?, ?, ?, ?, ?)
+                        ''', (a_id, str(row["日付"]), float(row.get("立ち幅跳び(m)", 0)), float(row.get("立ち三段跳び(m)", 0)), 
+                              float(row.get("メディシンボール(m)", 0)), float(row.get("30m走(秒)", 0)), str(row.get("メモ", ""))))
+                        success_count += 1
+                conn.commit()
+                conn.close()
+                st.success(f"{success_count} 件のCTテスト結果を取り込みました！")
+            except Exception as e:
+                st.error(f"取り込みエラー: {e}")
+
+# ---------------------------------------------------------
+# ページ5: 練習・テスト記録の確認
 # ---------------------------------------------------------
 elif page == MENU_LOGS:
     st.header("📊 記録データの確認")
