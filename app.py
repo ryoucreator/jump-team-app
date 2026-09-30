@@ -2,7 +2,6 @@ import sqlite3
 import pandas as pd
 import streamlit as st
 from datetime import date
-import os
 
 # ページ設定
 st.set_page_config(page_title="陸上部 跳躍ブロック データ管理システム", layout="wide")
@@ -10,44 +9,40 @@ st.set_page_config(page_title="陸上部 跳躍ブロック データ管理シ�
 DB_FILE = "land_and_field.db"
 
 # ---------------------------------------------------------
-# 1. データベース初期化・接続処理（自動修復機能付き）
+# 1. データベース初期化・取得処理
 # ---------------------------------------------------------
-def init_and_get_athletes():
+def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     
-    # 構造の不一致によるエラーを防ぐため、athletesテーブルが存在するか確認
-    try:
-        c.execute("SELECT id, name, grade, event FROM athletes")
-    except sqlite3.OperationalError:
-        # テーブルが存在しない、または古い構造の場合は一度テーブルを作り直す
-        c.execute("DROP TABLE IF EXISTS athletes")
-        c.execute("DROP TABLE IF EXISTS practice_logs")
-        
-        c.execute('''
-            CREATE TABLE athletes (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                grade TEXT,
-                event TEXT
-            )
-        ''')
-        
-        c.execute('''
-            CREATE TABLE practice_logs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                athlete_id INTEGER,
-                date TEXT,
-                menu_name TEXT,
-                set_num INTEGER,
-                distance_or_weight REAL,
-                reps_or_time REAL,
-                memo TEXT,
-                FOREIGN KEY (athlete_id) REFERENCES athletes(id)
-            )
-        ''')
-        
-        # サンプルデータの投入
+    # 選手マスターテーブル
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS athletes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            grade TEXT,
+            event TEXT
+        )
+    ''')
+    
+    # 練習記録テーブル
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS practice_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            athlete_id INTEGER,
+            date TEXT,
+            menu_name TEXT,
+            set_num INTEGER,
+            distance_or_weight REAL,
+            reps_or_time REAL,
+            memo TEXT,
+            FOREIGN KEY (athlete_id) REFERENCES athletes(id)
+        )
+    ''')
+    
+    # サンプルデータ（空の場合のみ）
+    c.execute("SELECT COUNT(*) FROM athletes")
+    if c.fetchone()[0] == 0:
         sample_athletes = [
             ('山田 太郎', '3年', '走幅跳'),
             ('佐藤 花子', '2年', '走高跳'),
@@ -56,98 +51,174 @@ def init_and_get_athletes():
         c.executemany("INSERT INTO athletes (name, grade, event) VALUES (?, ?, ?)", sample_athletes)
         conn.commit()
         
-        c.execute("SELECT id, name, grade, event FROM athletes")
-
-    rows = c.fetchall()
     conn.close()
-    
-    df = pd.DataFrame(rows, columns=["選手ID", "氏名", "学年", "専門種目"])
-    return df
 
 def get_connection():
     return sqlite3.connect(DB_FILE)
 
+def load_athletes():
+    init_db()
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        c.execute("SELECT id, name, grade, event FROM athletes")
+        rows = c.fetchall()
+        df = pd.DataFrame(rows, columns=["選手ID", "氏名", "学年", "専門種目"])
+    except Exception:
+        df = pd.DataFrame(columns=["選手ID", "氏名", "学年", "専門種目"])
+    finally:
+        conn.close()
+    return df
+
 # ---------------------------------------------------------
-# 2. アプリメイン画面
+# 2. サイドバー（メニュー切替）
 # ---------------------------------------------------------
+st.sidebar.title("メニュー")
+page = st.sidebar.radio(
+    "機能を選択してください",
+    ["練習メニュー一括入力", "選手登録・管理", "練習記録の確認・分析"]
+)
+
 st.title("🏃‍♂️ 陸上部 跳躍ブロック データ管理システム")
-st.header("🏋️ 練習メニューグループ一括入力")
 
-# 選手データの読み込み
-df_athletes = init_and_get_athletes()
+# ---------------------------------------------------------
+# ページ1: 練習メニュー一括入力
+# ---------------------------------------------------------
+if page == "練習メニュー一括入力":
+    st.header("🏋️ 練習メニューグループ一括入力")
+    df_athletes = load_athletes()
 
-if df_athletes.empty:
-    st.warning("登録されている選手がいません。")
-else:
-    st.subheader("1. 対象選手の選択（フィルター）")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        grades = ["すべて"] + [g for g in df_athletes["学年"].dropna().unique() if g]
-        selected_grade = st.selectbox("学年で絞り込み", grades)
+    if df_athletes.empty:
+        st.warning("登録されている選手がいません。「選手登録・管理」メニューから選手を追加してください。")
+    else:
+        st.subheader("1. 対象選手の選択（フィルター）")
+        col1, col2 = st.columns(2)
         
-    with col2:
-        events = ["すべて"] + [e for e in df_athletes["専門種目"].dropna().unique() if e]
-        selected_event = st.selectbox("専門種目で絞り込み", events, key="event_filter")
-
-    # フィルター適用
-    filtered_df = df_athletes.copy()
-    if selected_grade != "すべて":
-        filtered_df = filtered_df[filtered_df["学年"] == selected_grade]
-    if selected_event != "すべて":
-        filtered_df = filtered_df[filtered_df["専門種目"] == selected_event]
-
-    # 表示用フォーマット関数
-    def format_athlete(athlete_id):
-        match = df_athletes[df_athletes["選手ID"] == athlete_id]
-        if not match.empty:
-            row = match.iloc[0]
-            return f"{row['氏名']} ({row['学年']}/{row['専門種目']})"
-        return f"ID:{athlete_id}"
-
-    athlete_options = filtered_df["選手ID"].tolist()
-    
-    target_ids = st.multiselect(
-        "対象選手（チェックを外すことで個別除外が可能）",
-        options=athlete_options,
-        default=athlete_options,
-        format_func=format_athlete
-    )
-
-    st.markdown("---")
-    st.subheader("2. 練習メニューの入力")
-
-    with st.form("practice_form"):
-        p_date = st.date_input("日付", date.today())
-        menu_name = st.text_input("メニュー名", placeholder="例: 助走踏切ドリル, ウエイトスクワット")
-        
-        col_a, col_b, col_c = st.columns(3)
-        with col_a:
-            set_num = st.number_input("セット数 / 本数", min_value=1, value=1, step=1)
-        with col_b:
-            distance_or_weight = st.number_input("距離(m) または 重量(kg)", min_value=0.0, value=0.0, step=0.5)
-        with col_c:
-            reps_or_time = st.number_input("回数 または タイム(秒)", min_value=0.0, value=0.0, step=0.1)
+        with col1:
+            grades = ["すべて"] + [g for g in df_athletes["学年"].dropna().unique() if g]
+            selected_grade = st.selectbox("学年で絞り込み", grades)
             
-        memo = st.text_area("メモ・注意事項", placeholder="例: 踏切位置の意識、接地時の軸の維持など")
-        
-        submit = st.form_submit_button("一括登録する")
+        with col2:
+            events = ["すべて"] + [e for e in df_athletes["専門種目"].dropna().unique() if e]
+            selected_event = st.selectbox("専門種目で絞り込み", events, key="event_filter")
 
-        if submit:
-            if not target_ids:
-                st.error("対象選手が1人も選択されていません。")
-            elif not menu_name:
-                st.error("メニュー名を入力してください。")
-            else:
+        filtered_df = df_athletes.copy()
+        if selected_grade != "すべて":
+            filtered_df = filtered_df[filtered_df["学年"] == selected_grade]
+        if selected_event != "すべて":
+            filtered_df = filtered_df[filtered_df["専門種目"] == selected_event]
+
+        def format_athlete(athlete_id):
+            match = df_athletes[df_athletes["選手ID"] == athlete_id]
+            if not match.empty:
+                row = match.iloc[0]
+                return f"{row['氏名']} ({row['学年']}/{row['専門種目']})"
+            return f"ID:{athlete_id}"
+
+        athlete_options = filtered_df["選手ID"].tolist()
+        
+        target_ids = st.multiselect(
+            "対象選手（チェックを外すことで個別除外が可能）",
+            options=athlete_options,
+            default=athlete_options,
+            format_func=format_athlete
+        )
+
+        st.markdown("---")
+        st.subheader("2. 練習メニューの入力")
+
+        with st.form("practice_form"):
+            p_date = st.date_input("日付", date.today())
+            menu_name = st.text_input("メニュー名", placeholder="例: 助走踏切ドリル, ウエイトスクワット")
+            
+            col_a, col_b, col_c = st.columns(3)
+            with col_a:
+                set_num = st.number_input("セット数 / 本数", min_value=1, value=1, step=1)
+            with col_b:
+                distance_or_weight = st.number_input("距離(m) または 重量(kg)", min_value=0.0, value=0.0, step=0.5)
+            with col_c:
+                reps_or_time = st.number_input("回数 または タイム(秒)", min_value=0.0, value=0.0, step=0.1)
+                
+            memo = st.text_area("メモ・注意事項", placeholder="例: 踏切位置の意識、接地時の軸の維持など")
+            
+            submit = st.form_submit_button("一括登録する")
+
+            if submit:
+                if not target_ids:
+                    st.error("対象選手が1人も選択されていません。")
+                elif not menu_name:
+                    st.error("メニュー名を入力してください。")
+                else:
+                    conn = get_connection()
+                    c = conn.cursor()
+                    for a_id in target_ids:
+                        c.execute('''
+                            INSERT INTO practice_logs 
+                            (athlete_id, date, menu_name, set_num, distance_or_weight, reps_or_time, memo)
+                            VALUES (?, ?, ?, ?, ?, ?, ?)
+                        ''', (a_id, str(p_date), menu_name, set_num, distance_or_weight, reps_or_time, memo))
+                    conn.commit()
+                    conn.close()
+                    st.success(f"{len(target_ids)}名分の練習記録を一括登録しました！")
+
+# ---------------------------------------------------------
+# ページ2: 選手登録・管理
+# ---------------------------------------------------------
+elif page == "選手登録・管理":
+    st.header("👤 選手登録・管理")
+    
+    with st.form("add_athlete_form"):
+        name = st.text_input("氏名")
+        grade = st.selectbox("学年", ["1年", "2年", "3年", "4年", "その他"])
+        event = st.selectbox("専門種目", ["走幅跳", "走高跳", "三段跳", "棒高跳", "その他"])
+        submit_athlete = st.form_submit_button("選手を追加")
+        
+        if submit_athlete:
+            if name:
                 conn = get_connection()
                 c = conn.cursor()
-                for a_id in target_ids:
-                    c.execute('''
-                        INSERT INTO practice_logs 
-                        (athlete_id, date, menu_name, set_num, distance_or_weight, reps_or_time, memo)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
-                    ''', (a_id, str(p_date), menu_name, set_num, distance_or_weight, reps_or_time, memo))
+                c.execute("INSERT INTO athletes (name, grade, event) VALUES (?, ?, ?)", (name, grade, event))
                 conn.commit()
                 conn.close()
-                st.success(f"{len(target_ids)}名分の練習記録を一括登録しました！")
+                st.success(f"{name} 選手を登録しました！")
+                st.rerun()
+            else:
+                st.error("氏名を入力してください。")
+                
+    st.markdown("---")
+    st.subheader("登録済み選手一覧")
+    df_athletes = load_athletes()
+    st.dataframe(df_athletes, use_container_width=True)
+
+# ---------------------------------------------------------
+# ページ3: 練習記録の確認・分析
+# ---------------------------------------------------------
+elif page == "練習記録の確認・分析":
+    st.header("📊 練習記録一覧")
+    
+    conn = get_connection()
+    query = '''
+        SELECT 
+            p.date AS 日付,
+            a.name AS 氏名,
+            a.grade AS 学年,
+            a.event AS 専門種目,
+            p.menu_name AS メニュー名,
+            p.set_num AS セット数,
+            p.distance_or_weight AS "距離(m)/重量(kg)",
+            p.reps_or_time AS "回数/タイム(秒)",
+            p.memo AS メメモ
+        FROM practice_logs p
+        JOIN athletes a ON p.athlete_id = a.id
+        ORDER BY p.date DESC, p.id DESC
+    '''
+    try:
+        df_logs = pd.read_sql_query(query, conn)
+        if df_logs.empty:
+            st.info("まだ練習記録がありません。")
+        else:
+            st.dataframe(df_logs, use_container_width=True)
+    except Exception as e:
+        st.info("まだ練習記録データがありません。")
+    finally:
+        conn.close()
